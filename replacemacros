@@ -1,0 +1,151 @@
+#!/usr/bin/python
+
+import sys, os, optparse, re
+import pprint
+from functools import partial
+
+pp = pprint.PrettyPrinter(indent=4)
+
+def findcommands(f):
+	commands = []
+
+	for match in re.finditer(r'\\def\{?(\\[a-zA-Z]*)\}?\{(.*)\}', f):
+		c = { 'name': match.group(1), 'args': 0, 'optarg': None, 'def': match.group(2) }
+		commands.append(c)
+
+	# Search for parameter-less commands
+	for match in re.finditer(r'\\newcommand\{?(\\[a-zA-Z]*)\}?\{(.*)\}', f):
+		c = { 'name': match.group(1), 'args': 0, 'optarg': None, 'def': match.group(2) }
+		commands.append(c)
+	
+	# Search for commands with parameters (both required and optional)
+	for match in re.finditer(r'\\newcommand\{?(\\[a-zA-Z]*)\}?\[(\d*)\](\[([^\]]*)\])?\{(.*)\}', f):
+		c = { 'name': match.group(1), 'args': int(match.group(2)), 'optarg': match.group(4), 'def': match.group(5) }
+		commands.append(c)
+
+	#pp.pprint(commands)
+	return commands
+
+
+def replace_helper(c, matchobj):
+	s = c['def'] # The replacement, i.e. the last argument of \newcommand
+
+	if c['optarg'] != None:
+		# For commands taking optional parameters, the matchobj.groups tuple is
+		# always shifted two to the right. The first two elements (i.e. group(1)
+		# and group(2)) look like ('[Bla]', 'Bla') or (None, None) when optarg
+		# 'Bla' or no optarg is given respectively.
+		# (Also note that range(i,j) returns an array running from i to j-1.)
+		for i in range(1, c['args'] + 1):
+			# If the optarg is omitted, we do it manually.
+			if i == 1 and matchobj.group(i+1) == None:
+				s = re.sub(r'#%d' % i, c['optarg'].replace('\\', '\\\\'), s)
+				continue
+			s = re.sub(r'#%d' % i, matchobj.group(i+1).replace('\\', '\\\\'), s)
+	
+	else:
+		for i in range(1, c['args'] + 1):
+			s = re.sub(r'#%d' % i, matchobj.group(i).replace('\\', '\\\\'), s)
+
+	# If no arguments were given to the command, then the character that
+	# terminated the command was stored in matchobj.group(1), so we put it back.
+	if c['args'] == 0 or (c['optarg'] != None and c['args'] == 1 and matchobj.group(2) == None):
+		s = s + matchobj.group(1)
+
+	return s
+
+
+def replace(f, commands):
+	# Grab the body of the text, i.e. the part after \begin{document}. This code
+	# also grabs the \end{document} but we don't care.
+	preamble, sep, body = f.partition('\\begin{document}')
+	if len(body) == 0:
+		sys.exit('No body found; exiting')
+
+	for c in commands:
+		com = ''
+
+		if c['optarg'] == None:
+			com = '\\' + c['name'] + '\{(.*?)\}' * c['args']
+			# If the command takes no arguments, we require that some non-letter
+			# is found after \command before we consider it a match. We store it
+			# in a group in order to put it back later.
+			if c['args'] == 0:
+				com = com + r'([^a-zA-Z])'
+		else:
+			if c['args'] == 1:
+				# If the only arg that the command takes is the optional one,
+				# search for either \command[arg] or \command followed by some
+				# non-letter that signifies the end of the command.
+				com = '\\' + c['name'] + '(\[(.*)\]|[^a-zA-Z])'
+			else:
+				com = '\\' + c['name'] + '(\[(.*)\])?' + '\{(.*?)\}' * (c['args']-1)
+
+		#print com
+		body = re.sub(com, partial(replace_helper, c), body)
+		
+	return "%s%s%s" % (preamble, sep, body)
+
+
+def main():
+
+	## Preparation #############################################################
+
+	usage = """usage: %prog inputfile [outputfile]
+
+		Scans the inputfile for \\newcommand's and \\def's, and then replaces occurences
+		of those commands in the body of text with their definitions. If no outputfile
+		is given, the result is printed in stdout.
+
+		Some restrictions:
+		- In lines that define commands, the last } of the line MUST be the end of the
+		  definition of the command.
+		- \\def's with arguments are not supported, use \\newcommand for those.
+		- In the body, when a command is used, its arguments MUST be given with {}
+		  around them.
+
+		No guarantee of correctness of the output is guaranteed. Always check manually."""
+
+	parser = optparse.OptionParser(usage.replace("\t", ''))
+	(options, args) = parser.parse_args()
+	if len(args) < 1 or len(args) > 2:
+		parser.error("Incorrect number of arguments; 1 or 2 expected, %d given" % len(args))
+
+	filepath = args[0]
+	if not os.path.exists(filepath):
+		parser.error("Nonexistent file: %s" % filepath)
+
+	fileobject = open(filepath)
+	f = fileobject.read()
+	fileobject.close()
+
+	## Do the work #############################################################
+
+	# Get the defined commands
+	commands = findcommands(f)
+
+	# Escape them; in the resulting file they will no longer be needed
+	f = f.replace('\\newcommand', '%\\newcommand')
+	f = f.replace('\\def', '%\\def')
+
+	# Some commands may depend on others, so we keep doing it until
+	# there is no more effect.
+	old = f
+	new = f
+	while True:
+		old = new
+		new = replace(old, commands)
+		if old == new:
+			break
+
+	## Save or output ###########################################################
+	if len(args) == 2:
+		outputfile = open(args[1], 'w')
+		outputfile.write(new)
+		outputfile.close()
+	else:
+		print new
+
+
+if __name__ == "__main__":
+	main()
