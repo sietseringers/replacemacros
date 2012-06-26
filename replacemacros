@@ -23,54 +23,92 @@ from functools import partial
 
 pp = pprint.PrettyPrinter(indent=4)
 
+def findarguments(text, startpos=0):
+	args = []
+
+	start = 0
+	end = 0
+	count = 0
+	kind = ''
+	close = ''
+
+	for i in range(startpos, len(text)):
+		# If count = 0 at this moment, then we are either between arguments,
+		# or at the end of the command. At this point, the only possible characters
+		# that do NOT signify the end of the command are [, { and whitespaces.
+		if count == 0 and re.match(r'[\[{\s]', text[i]) == None:
+			#print "Stop."
+			break
+
+		# We found an opening bracket
+		if text[i] == '[' or text[i] == '{':
+			if count == 0: # We are between arguments and have found a new one
+				#print "Open bracket found: %d %s" % (i, text[i])
+				start = i
+				close = ']' if text[start] == '[' else '}'
+			# If we find the same bracket again, increase the counter.
+			if text[i] == text[start]:
+				count += 1
+
+		# We found a closing bracket
+		if text[i] == close:
+			count -= 1
+			if count == 0: # Last bracket found; end of the argument
+				#print "Close bracket found: %d %s" % (i, text[i])
+				end = i
+				arg = {'text': text[start+1:end], 'required': True if text[start] == '{' else False }
+				args.append(arg)
+
+	#pp.pprint(args)
+	return (args, end)
+
+
+
 def findcommands(f):
 	commands = []
 
-	for match in re.finditer(r'\\def\{?(\\[a-zA-Z]*)\}?\{(.*)\}', f):
-		c = { 'name': match.group(1), 'args': 0, 'optarg': None, 'def': match.group(2) }
+	for match in re.finditer(r'\\def\{?(\\[a-zA-Z]*)\}?', f):
+		c = { }
+		c['name'] = match.group(1)
+		(args, pos) = findarguments(f, match.end())
+		c['args'] = 0
+		c['optarg'] = None
+		c['def'] = args[0]['text']
 		commands.append(c)
 
-	# Search for parameter-less commands
-	for match in re.finditer(r'\\newcommand\{?(\\[a-zA-Z]*)\}?\{(.*)\}', f):
-		c = { 'name': match.group(1), 'args': 0, 'optarg': None, 'def': match.group(2) }
-		commands.append(c)
-	
-	# Search for commands with parameters (both required and optional)
-	for match in re.finditer(r'\\newcommand\{?(\\[a-zA-Z]*)\}?\[(\d*)\](\[([^\]]*)\])?\{(.*)\}', f):
-		c = { 'name': match.group(1), 'args': int(match.group(2)), 'optarg': match.group(4), 'def': match.group(5) }
+	# Look for \newcommands. We save the first argument (i.e. the command name)
+	# here instead of letting findarguments do it, because it may or may not
+	# be enclosed by brackets. This causes no problems because the command name
+	# may consist only of letters anyway.
+	for match in re.finditer(r'\\newcommand\{?(\\[a-zA-Z]*)\}?', f):
+		c = { }
+		c['name'] = match.group(1)
+		(args, pos) = findarguments(f, match.end())
+
+		# If the first argument found is a required one, it is the definition;
+		# the command accepts no arguments, optional or required ones.
+		if args[0]['required']:
+			c['args'] = 0
+			c['optarg'] = None
+			c['def'] = args[0]['text']
+
+		else:
+			# The second argument is always the total number of arguments.
+			c['args'] = int(args[0]['text'])
+
+			# If the third argument is an optional one, it is the one containing
+			# the value for the optional argument. Otherwise it is the definition.
+			if args[1]['required']:
+				c['optarg'] = None
+				c['def'] = args[1]['text']
+			else:
+				c['optarg'] = args[1]['text']
+				c['def'] = args[2]['text']
+
 		commands.append(c)
 
 	#pp.pprint(commands)
 	return commands
-
-
-def replace_helper(c, matchobj):
-	s = c['def'] # The replacement, i.e. the last argument of \newcommand
-
-	if c['optarg'] != None:
-		# For commands taking optional parameters, the matchobj.groups tuple is
-		# always shifted two to the right. The first two elements (i.e. group(1)
-		# and group(2)) look like ('[Bla]', 'Bla') or (None, None) when optarg
-		# 'Bla' or no optarg is given respectively.
-		# (Also note that range(i,j) returns an array running from i to j-1.)
-		for i in range(1, c['args'] + 1):
-			# If the optarg is omitted, we do it manually.
-			if i == 1 and matchobj.group(i+1) == None:
-				s = re.sub(r'#%d' % i, c['optarg'].replace('\\', '\\\\'), s)
-				continue
-			s = re.sub(r'#%d' % i, matchobj.group(i+1).replace('\\', '\\\\'), s)
-	
-	else:
-		for i in range(1, c['args'] + 1):
-			s = re.sub(r'#%d' % i, matchobj.group(i).replace('\\', '\\\\'), s)
-
-	# If no arguments were given to the command, then the character that
-	# terminated the command was included by the pattern and  stored in
-	# matchobj.group(1), so we put it back.
-	if c['args'] == 0 or (c['optarg'] != None and c['args'] == 1 and matchobj.group(2) == None):
-		s = s + matchobj.group(1)
-
-	return s
 
 
 def replace(f, commands):
@@ -81,34 +119,45 @@ def replace(f, commands):
 		sys.exit('No body found; exiting')
 
 	for c in commands:
-		com = ''
+		pos = 0
+		while True:
+			# Find the next occurence of the command
+			start = body.find(c['name'], pos)
+			if start == -1: # None found in the remaining text: bail out
+				break
 
-		# Build the regexp that will match occurences of the command in the body.
-		if c['optarg'] == None:
-			# Look for the command name, and the appropriate number of {}'s
-			com = '\\' + c['name'] + '\{(.*?)\}' * c['args']
-			# If the command occurs in the body without any arguments, then
-			# whatever non-letter comes after the name of the command signifies
-			# that the end of the command has been reached. We let this non-
-			# letter also be a part of the pattern, otherwise the pattern will
-			# match \ab when it encounters \abc.
-			if c['args'] == 0:
-				com = com + r'([^a-zA-Z])'
-		else:
-			if c['args'] == 1:
-				# If the only arg that the command takes is the optional one,
-				# search for either \command[arg] or \command followed by some
-				# non-letter that signifies the end of the command (see above).
-				com = '\\' + c['name'] + '(\[(.*)\]|[^a-zA-Z])'
+			# It's possible that we found \abc while we were looking for \a.
+			# Skip those matches.
+			if re.match(r'^[a-zA-Z]$', body[start + len(c['name'])]):
+				pos = start + len(c['name']) # Look someplace else in the next iter
+				continue
+
+			# Retrieve the arguments
+			(args, end) = findarguments(body, start + len(c['name']))
+
+			# If the first argument is optional and it was omitted, we insert
+			# its standard value in the arguments array for later convenience.
+			if c['optarg'] != None and (len(args) == 0 or args[0]['required']):
+				args.insert(0, {'required': False, 'text': c['optarg']})
+
+			# Save the positions for later
+			if end == 0: # Happens when no arguments were given
+				end = start + len(c['name'])
 			else:
-				com = '\\' + c['name'] + '(\[(.*)\])?' + '\{(.*?)\}' * (c['args']-1)
+				# findarguments returns as second parameter the index of the
+				# closing bracket of the last argument; in the replacing later
+				# on we need to be one position further than that.
+				end += 1
+			pos = end # The position at which to start looking in the next iteration
 
-		# Look for occurences of the pattern. For each occurence, 
-		# replace_helper(c, matchobj) is called, which returns the string that
-		# is inserted at the place of the occurence.
-		#print com
-		body = re.sub(com, partial(replace_helper, c), body)
-		
+			# Prepare the replacement text
+			replacement = c['def']
+			for i in range(1, c['args'] + 1):
+				replacement = replacement.replace('#%d' % i, args[i-1]['text'])
+
+			# Do the replacing
+			body = body[:start] + replacement + body[end:]
+
 	return "%s%s%s" % (preamble, sep, body)
 
 
@@ -123,13 +172,9 @@ def main():
 		is given, the result is printed in stdout.
 
 		Some restrictions:
-		- In lines that define commands, the last } of the line MUST be the end of the
-		  definition of the command.
 		- \\def's with arguments are not supported, use \\newcommand for those.
 		- In the body, when a command is used, its arguments MUST be given with {}
 		  around them.
-		- When using a command, angular braces are not allowed within required
-		  arguments, and square brackets are not allowed within optional arguments.
 
 		No guarantee of correctness of the output is guaranteed. Always check manually."""
 
@@ -165,7 +210,7 @@ def main():
 		if old == new:
 			break
 
-	## Save or output ###########################################################
+	## Save or output ##########################################################
 	if len(args) == 2:
 		outputfile = open(args[1], 'w')
 		outputfile.write(new)
