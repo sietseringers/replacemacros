@@ -1,5 +1,22 @@
 #!/usr/bin/python
 
+# replacemacros
+#
+# Copyright 2012 Sietse Ringers
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, version 3 of the License.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program (see LICENSE.txt). If not, see
+# <http://www.gnu.org/licenses/>.
+
 import sys, os, optparse, re
 import pprint
 from functools import partial
@@ -48,7 +65,8 @@ def replace_helper(c, matchobj):
 			s = re.sub(r'#%d' % i, matchobj.group(i).replace('\\', '\\\\'), s)
 
 	# If no arguments were given to the command, then the character that
-	# terminated the command was stored in matchobj.group(1), so we put it back.
+	# terminated the command was included by the pattern and  stored in
+	# matchobj.group(1), so we put it back.
 	if c['args'] == 0 or (c['optarg'] != None and c['args'] == 1 and matchobj.group(2) == None):
 		s = s + matchobj.group(1)
 
@@ -65,22 +83,29 @@ def replace(f, commands):
 	for c in commands:
 		com = ''
 
+		# Build the regexp that will match occurences of the command in the body.
 		if c['optarg'] == None:
+			# Look for the command name, and the appropriate number of {}'s
 			com = '\\' + c['name'] + '\{(.*?)\}' * c['args']
-			# If the command takes no arguments, we require that some non-letter
-			# is found after \command before we consider it a match. We store it
-			# in a group in order to put it back later.
+			# If the command occurs in the body without any arguments, then
+			# whatever non-letter comes after the name of the command signifies
+			# that the end of the command has been reached. We let this non-
+			# letter also be a part of the pattern, otherwise the pattern will
+			# match \ab when it encounters \abc.
 			if c['args'] == 0:
 				com = com + r'([^a-zA-Z])'
 		else:
 			if c['args'] == 1:
 				# If the only arg that the command takes is the optional one,
 				# search for either \command[arg] or \command followed by some
-				# non-letter that signifies the end of the command.
+				# non-letter that signifies the end of the command (see above).
 				com = '\\' + c['name'] + '(\[(.*)\]|[^a-zA-Z])'
 			else:
 				com = '\\' + c['name'] + '(\[(.*)\])?' + '\{(.*?)\}' * (c['args']-1)
 
+		# Look for occurences of the pattern. For each occurence, 
+		# replace_helper(c, matchobj) is called, which returns the string that
+		# is inserted at the place of the occurence.
 		#print com
 		body = re.sub(com, partial(replace_helper, c), body)
 		
@@ -103,6 +128,8 @@ def main():
 		- \\def's with arguments are not supported, use \\newcommand for those.
 		- In the body, when a command is used, its arguments MUST be given with {}
 		  around them.
+		- When using a command, angular braces are not allowed within required
+		  arguments, and square brackets are not allowed within optional arguments.
 
 		No guarantee of correctness of the output is guaranteed. Always check manually."""
 

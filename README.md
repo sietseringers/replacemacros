@@ -15,5 +15,7 @@ Some restrictions:
 - \def's with arguments are not supported, use \newcommand for those.
 - In the body, when a command is used, its arguments MUST be given with {}
   around them.
+- When using a command, angular braces are not allowed within required
+  arguments, and square brackets are not allowed within optional arguments.
 
 No guarantee of correctness of the output is guaranteed. Always check manually.
