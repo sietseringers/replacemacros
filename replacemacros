@@ -28,25 +28,49 @@ pp = pprint.PrettyPrinter(indent=4)
 
 def findcommands(f):
 	commands = []
+	new = '' # The file with the macrodefinitions commented out (using \iffalse)
+	lastcommandposition = 0
 
 	# Look foor \def's. We save the first argument (i.e. the command name)
 	# here instead of letting findarguments do it, because it may or may not
 	# be enclosed by brackets. This causes no problems because the command name
 	# may consist only of letters anyway.
 	for match in re.finditer(r'\\def\{?(\\[a-zA-Z]*)\}?', f):
+		# Skip lines that are commented out using %
+		if re.search(r'%[^\n]*\\def', f[:match.end()]):
+			continue
+
 		c = { }
 		c['name'] = match.group(1)
 		(args, pos) = findarguments(f, 1, match.end())
 		c['args'] = 0
 		c['optarg'] = None
 		c['def'] = args[0]['text']
+
 		commands.append(c)
 
-	# Look for \newcommands. 
+		# Build the replacement file with the definition commented out
+		new += f[lastcommandposition:match.start()] + '\\iffalse' + f[match.start():pos] + '\\fi '
+		lastcommandposition = pos
+
+	# Reset the variables that control the building of the replacement file
+	new += f[lastcommandposition:]
+	f = new
+	new = ''
+	lastcommandposition = 0
+
+	# Look for \newcommands.
 	for match in re.finditer(r'\\newcommand\{?(\\[a-zA-Z]*)\}?', f):
+		# Skip lines that are commented out using %
+		if re.search(r'%[^\n]*\\newcommand', f[:match.end()]):
+			continue
+
 		c = { }
 		c['name'] = match.group(1)
 		(args, pos) = findarguments(f, 1, match.end())
+
+		new += f[lastcommandposition:match.start()] + '\\iffalse' + f[match.start():pos] + '\\fi '
+		lastcommandposition = pos
 
 		# If the first argument found is a required one, it is the definition;
 		# the command accepts no arguments, optional or required ones.
@@ -70,8 +94,11 @@ def findcommands(f):
 
 		commands.append(c)
 
+	new += f[lastcommandposition:]
+
+	#print new
 	#pp.pprint(commands)
-	return commands
+	return (commands, new)
 
 
 def replace(f, commands):
@@ -132,9 +159,7 @@ def main():
 		of those commands in the body of text with their definitions. If no outputfile
 		is given, the result is printed in stdout.
 
-		Some restrictions:
-		- \\def's with arguments are not supported, use \\newcommand for those.
-		- No comments are allowed within macros.
+		\\def's with arguments are not supported, use \\newcommand for those.
 
 		No guarantee of correctness of the output is guaranteed. Always check manually."""
 
@@ -153,12 +178,8 @@ def main():
 
 	## Do the work #############################################################
 
-	# Get the defined commands
-	commands = findcommands(f)
-
-	# Escape them; in the resulting file they will no longer be needed
-	f = f.replace('\\newcommand', '%\\newcommand')
-	f = f.replace('\\def', '%\\def')
+	# Get the defined commands and comment out their definitions
+	(commands, f) = findcommands(f)
 
 	# Some commands may depend on others, so we keep doing it until
 	# there is no more effect.
