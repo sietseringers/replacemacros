@@ -21,69 +21,32 @@ import sys, os, optparse, re
 import pprint
 from functools import partial
 
+from findarguments import findarguments
+
 pp = pprint.PrettyPrinter(indent=4)
-
-def findarguments(text, startpos=0):
-	args = []
-
-	start = 0
-	end = 0
-	count = 0
-	kind = ''
-	close = ''
-
-	for i in range(startpos, len(text)):
-		# If count = 0 at this moment, then we are either between arguments,
-		# or at the end of the command. At this point, the only possible characters
-		# that do NOT signify the end of the command are [, { and whitespaces.
-		if count == 0 and re.match(r'[\[{\s]', text[i]) == None:
-			#print "Stop."
-			break
-
-		# We found an opening bracket
-		if text[i] == '[' or text[i] == '{':
-			if count == 0: # We are between arguments and have found a new one
-				#print "Open bracket found: %d %s" % (i, text[i])
-				start = i
-				close = ']' if text[start] == '[' else '}'
-			# If we find the same bracket again, increase the counter.
-			if text[i] == text[start]:
-				count += 1
-
-		# We found a closing bracket
-		if text[i] == close:
-			count -= 1
-			if count == 0: # Last bracket found; end of the argument
-				#print "Close bracket found: %d %s" % (i, text[i])
-				end = i
-				arg = {'text': text[start+1:end], 'required': True if text[start] == '{' else False }
-				args.append(arg)
-
-	#pp.pprint(args)
-	return (args, end)
-
 
 
 def findcommands(f):
 	commands = []
 
+	# Look foor \def's. We save the first argument (i.e. the command name)
+	# here instead of letting findarguments do it, because it may or may not
+	# be enclosed by brackets. This causes no problems because the command name
+	# may consist only of letters anyway.
 	for match in re.finditer(r'\\def\{?(\\[a-zA-Z]*)\}?', f):
 		c = { }
 		c['name'] = match.group(1)
-		(args, pos) = findarguments(f, match.end())
+		(args, pos) = findarguments(f, 1, match.end())
 		c['args'] = 0
 		c['optarg'] = None
 		c['def'] = args[0]['text']
 		commands.append(c)
 
-	# Look for \newcommands. We save the first argument (i.e. the command name)
-	# here instead of letting findarguments do it, because it may or may not
-	# be enclosed by brackets. This causes no problems because the command name
-	# may consist only of letters anyway.
+	# Look for \newcommands. 
 	for match in re.finditer(r'\\newcommand\{?(\\[a-zA-Z]*)\}?', f):
 		c = { }
 		c['name'] = match.group(1)
-		(args, pos) = findarguments(f, match.end())
+		(args, pos) = findarguments(f, 1, match.end())
 
 		# If the first argument found is a required one, it is the definition;
 		# the command accepts no arguments, optional or required ones.
@@ -133,7 +96,10 @@ def replace(f, commands):
 				continue
 
 			# Retrieve the arguments
-			(args, end) = findarguments(body, start + len(c['name']))
+			reqargcount = c['args']
+			if c['optarg'] != None:
+				reqargcount -= 1
+			(args, end) = findarguments(body, reqargcount, start + len(c['name']))
 
 			# If the first argument is optional and it was omitted, we insert
 			# its standard value in the arguments array for later convenience.
@@ -141,13 +107,8 @@ def replace(f, commands):
 				args.insert(0, {'required': False, 'text': c['optarg']})
 
 			# Save the positions for later
-			if end == 0: # Happens when no arguments were given
+			if end == 1: # Happens when no arguments were given
 				end = start + len(c['name'])
-			else:
-				# findarguments returns as second parameter the index of the
-				# closing bracket of the last argument; in the replacing later
-				# on we need to be one position further than that.
-				end += 1
 			pos = end # The position at which to start looking in the next iteration
 
 			# Prepare the replacement text
@@ -173,8 +134,7 @@ def main():
 
 		Some restrictions:
 		- \\def's with arguments are not supported, use \\newcommand for those.
-		- In the body, when a command is used, its arguments MUST be given with {}
-		  around them.
+		- No comments are allowed within macros.
 
 		No guarantee of correctness of the output is guaranteed. Always check manually."""
 

@@ -11,7 +11,6 @@ is given, the result is printed in stdout.
 
 Some restrictions:
 - \def's with arguments are not supported, use \newcommand for those.
-- In the body, when a command is used, its arguments MUST be given with {}
-  around them.
+- No comments are allowed within macros.
 
 No guarantee of correctness of the output is guaranteed. Always check manually.
